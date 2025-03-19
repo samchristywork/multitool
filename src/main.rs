@@ -18,12 +18,51 @@ fn print_rpc_requests(requests: &[Value]) {
 }
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        eprintln!("Usage: {} <file>", args[0]);
+        std::process::exit(1);
+    }
+
+    let current_file = fs::canonicalize(&args[1]).unwrap_or_else(|_| {
+        eprintln!("Error: Unable to canonicalize file path");
+        std::process::exit(1);
+    });
+    let current_file = current_file.to_str().unwrap();
+
+    let source = fs::read_to_string(&args[1]).unwrap_or_else(|_| {
+        eprintln!("Error: Unable to read file");
+        std::process::exit(1);
+    });
+
     let requests = vec![
         json!({
             "jsonrpc": "2.0",
             "method": "initialize",
             "params": {},
             "id": 1
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": format!("file://{}", current_file),
+                    "languageId": "c",
+                    "version": 1,
+                    "text": source
+                }
+            }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didClose",
+            "params": {
+                "textDocument": {
+                    "uri": format!("file://{}", current_file)
+                }
+            }
         }),
         ];
 
