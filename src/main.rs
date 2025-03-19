@@ -57,6 +57,30 @@ fn main() {
         }),
         json!({
             "jsonrpc": "2.0",
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": {
+                    "uri": format!("file://{}", current_file)
+                },
+                "position": {
+                    "line": 0,
+                    "character": 28
+                }
+            },
+            "id": 2
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/documentSymbol",
+            "params": {
+                "textDocument": {
+                    "uri": format!("file://{}", current_file)
+                }
+            },
+            "id": 3
+        }),
+        json!({
+            "jsonrpc": "2.0",
             "method": "textDocument/didClose",
             "params": {
                 "textDocument": {
