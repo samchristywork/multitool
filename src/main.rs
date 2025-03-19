@@ -88,6 +88,11 @@ fn main() {
                 }
             }
         }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "exit",
+            "params": Value::Null
+        }),
         ];
 
     print_rpc_requests(&requests);
