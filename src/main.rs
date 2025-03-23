@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -24,14 +24,10 @@ fn create_request(method: &str, params: Value, id: Option<i32>) -> Value {
     request
 }
 
-
 fn print_rpc_request(request: &Value) {
     let request_json = request.to_string() + "\r\n";
     let content_length = request_json.as_bytes().len();
-    println!(
-        "Content-Length: {}\r\n\r\n{}",
-        content_length, request_json
-    );
+    println!("Content-Length: {}\r\n\r\n{}", content_length, request_json);
 }
 
 fn print_rpc_requests(requests: &[Value]) {
@@ -40,44 +36,14 @@ fn print_rpc_requests(requests: &[Value]) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file>", args[0]);
-        std::process::exit(1);
-    }
-
-    // Canonicalize the file path and handle errors
-    let file_path = PathBuf::from(&args[1]);
-    let current_file = match fs::canonicalize(&file_path) {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Unable to canonicalize file path");
-            std::process::exit(1);
-        }
-    };
-
-    let current_file_str = current_file.to_str().unwrap();
-    let file_uri_str = file_uri(current_file_str);
-
-    // Read the file content and handle errors
-    let source = match fs::read_to_string(&file_path) {
-        Ok(content) => content,
-        Err(_) => {
-            eprintln!("Error: Unable to read file");
-            std::process::exit(1);
-        }
-    };
-
-    // Build the requests using the create_request function and constants
-    let requests = vec![
+fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
+    vec![
         create_request("initialize", json!({}), Some(1)),
         create_request(
             "textDocument/didOpen",
             json!({
                 "textDocument": {
-                    "uri": file_uri_str.clone(),
+                    "uri": file_uri_str,
                     "languageId": LANGUAGE_ID,
                     "version": 1,
                     "text": source
@@ -89,7 +55,7 @@ fn main() {
             "textDocument/definition",
             json!({
                 "textDocument": {
-                    "uri": file_uri_str.clone()
+                    "uri": file_uri_str
                 },
                 "position": {
                     "line": 0,
@@ -102,7 +68,7 @@ fn main() {
             "textDocument/documentSymbol",
             json!({
                 "textDocument": {
-                    "uri": file_uri_str.clone()
+                    "uri": file_uri_str
                 }
             }),
             Some(3),
@@ -111,13 +77,45 @@ fn main() {
             "textDocument/didClose",
             json!({
                 "textDocument": {
-                    "uri": file_uri_str.clone()
+                    "uri": file_uri_str
                 }
             }),
             None,
         ),
         create_request("exit", Value::Null, None),
-    ];
+    ]
+}
 
+fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
+    let current_file = fs::canonicalize(file_path)
+        .map_err(|_| "Error: Unable to canonicalize file path".to_string())?;
+    let current_file_str = current_file.to_str().unwrap();
+    let file_uri_str = file_uri(current_file_str);
+
+    let source =
+        fs::read_to_string(file_path).map_err(|_| "Error: Unable to read file".to_string())?;
+
+    Ok((file_uri_str, source))
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        eprintln!("Usage: {} <file>", args[0]);
+        std::process::exit(1);
+    }
+
+    let file_path = PathBuf::from(&args[1]);
+
+    let (file_uri_str, source) = match process_file(&file_path) {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+    };
+
+    let requests = build_requests(&file_uri_str, &source);
     print_rpc_requests(&requests);
 }
