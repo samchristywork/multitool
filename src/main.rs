@@ -7,10 +7,10 @@ const RPC_VERSION: &str = "2.0";
 const LANGUAGE_ID: &str = "c";
 
 fn file_uri(file_path: &str) -> String {
-    format!("file://{}", file_path)
+    format!("file://{file_path}")
 }
 
-fn create_request(method: &str, params: Value, id: Option<i32>) -> Value {
+fn create_request(method: &str, params: &Value, id: Option<i32>) -> Value {
     let mut request = json!({
         "jsonrpc": RPC_VERSION,
         "method": method,
@@ -26,8 +26,8 @@ fn create_request(method: &str, params: Value, id: Option<i32>) -> Value {
 
 fn print_rpc_request(request: &Value) {
     let request_json = request.to_string() + "\r\n";
-    let content_length = request_json.as_bytes().len();
-    println!("Content-Length: {}\r\n\r\n{}", content_length, request_json);
+    let content_length = request_json.len();
+    println!("Content-Length: {content_length}\r\n\r\n{request_json}");
 }
 
 fn print_rpc_requests(requests: &[Value]) {
@@ -38,10 +38,10 @@ fn print_rpc_requests(requests: &[Value]) {
 
 fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
     vec![
-        create_request("initialize", json!({}), Some(1)),
+        create_request("initialize", &json!({}), Some(1)),
         create_request(
             "textDocument/didOpen",
-            json!({
+            &json!({
                 "textDocument": {
                     "uri": file_uri_str,
                     "languageId": LANGUAGE_ID,
@@ -53,7 +53,7 @@ fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
         ),
         create_request(
             "textDocument/definition",
-            json!({
+            &json!({
                 "textDocument": {
                     "uri": file_uri_str
                 },
@@ -66,7 +66,7 @@ fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
         ),
         create_request(
             "textDocument/documentSymbol",
-            json!({
+            &json!({
                 "textDocument": {
                     "uri": file_uri_str
                 }
@@ -75,21 +75,21 @@ fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
         ),
         create_request(
             "textDocument/didClose",
-            json!({
+            &json!({
                 "textDocument": {
                     "uri": file_uri_str
                 }
             }),
             None,
         ),
-        create_request("exit", Value::Null, None),
+        create_request("exit", &Value::Null, None),
     ]
 }
 
 fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     let current_file = fs::canonicalize(file_path)
         .map_err(|_| "Error: Unable to canonicalize file path".to_string())?;
-    let current_file_str = current_file.to_str().unwrap();
+    let current_file_str = current_file.to_str().expect("Error: Unable to convert path to string");
     let file_uri_str = file_uri(current_file_str);
 
     let source =
@@ -111,7 +111,7 @@ fn main() {
     let (file_uri_str, source) = match process_file(&file_path) {
         Ok(result) => result,
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("{err}");
             std::process::exit(1);
         }
     };
