@@ -123,6 +123,15 @@ fn readline() -> io::Result<String> {
     Ok(buffer.trim_end().to_string())
 }
 
+struct Count(i32);
+
+impl Count {
+    fn inc(&mut self) -> i32 {
+        self.0 += 1;
+        self.0
+    }
+}
+
 fn run_server(command: &str) {
     let mut child = Command::new(command)
         .stdin(Stdio::piped())
@@ -131,10 +140,11 @@ fn run_server(command: &str) {
         .spawn()
         .expect("Failed to start server");
 
+    let mut count = Count(0);
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
     std::thread::spawn(move || {
         stdin
-            .write_all(&initialize_request(1))
+            .write_all(&initialize_request(count.inc()))
             .expect("Failed to write initialize request");
 
         let filename = readline().expect("Failed to read filename");
@@ -146,11 +156,11 @@ fn run_server(command: &str) {
             .expect("Failed to write didOpen request");
 
         stdin
-            .write_all(&definition_request(2, &file_uri, 0, 28))
+            .write_all(&definition_request(count.inc(), &file_uri, 0, 28))
             .expect("Failed to write definition request");
 
         stdin
-            .write_all(&document_symbol_request(3, &file_uri))
+            .write_all(&document_symbol_request(count.inc(), &file_uri))
             .expect("Failed to write documentSymbol request");
 
         stdin
