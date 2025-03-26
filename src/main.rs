@@ -89,7 +89,9 @@ fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
 fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     let current_file = fs::canonicalize(file_path)
         .map_err(|_| "Error: Unable to canonicalize file path".to_string())?;
-    let current_file_str = current_file.to_str().expect("Error: Unable to convert path to string");
+    let current_file_str = current_file
+        .to_str()
+        .expect("Error: Unable to convert path to string");
     let file_uri_str = file_uri(current_file_str);
 
     let source =
