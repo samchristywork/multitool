@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::io::Write;
 
 const RPC_VERSION: &str = "2.0";
 const LANGUAGE_ID: &str = "c";
@@ -24,16 +25,19 @@ fn create_request(method: &str, params: &Value, id: Option<i32>) -> Value {
     request
 }
 
-fn print_rpc_request(request: &Value) {
+fn generate_rpc_request(request: &Value) -> String {
     let request_json = request.to_string() + "\r\n";
     let content_length = request_json.len();
-    println!("Content-Length: {content_length}\r\n\r\n{request_json}");
+    format!("Content-Length: {content_length}\r\n\r\n{request_json}")
 }
 
-fn print_rpc_requests(requests: &[Value]) {
+fn generate_rpc_requests(requests: &[Value]) -> String {
+    let mut content = String::new();
     for request in requests {
-        print_rpc_request(request);
+        content += &generate_rpc_request(request);
     }
+
+    content
 }
 
 fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
@@ -100,15 +104,33 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     Ok((file_uri_str, source))
 }
 
+fn run_server(command: &str, input: String) {
+    let mut child = std::process::Command::new(command)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Error: Unable to start the server");
+
+    if let Some(mut stdin) = child.stdin.take() {
+        std::thread::spawn(move || {
+            stdin.write_all(input.as_bytes()).expect("Error: Unable to write to stdin");
+        });
+    }
+
+    let output = child.wait_with_output().expect("Error: Unable to read server output");
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file>", args[0]);
+    if args.len() < 3 {
+        eprintln!("Usage: {} <file> <command>", args[0]);
         std::process::exit(1);
     }
 
     let file_path = PathBuf::from(&args[1]);
+    let command = &args[2];
 
     let (file_uri_str, source) = match process_file(&file_path) {
         Ok(result) => result,
@@ -119,5 +141,7 @@ fn main() {
     };
 
     let requests = build_requests(&file_uri_str, &source);
-    print_rpc_requests(&requests);
+    let input = generate_rpc_requests(&requests);
+
+    run_server(command, input);
 }
