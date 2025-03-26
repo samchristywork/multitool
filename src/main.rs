@@ -1,7 +1,7 @@
 use serde_json::{Value, json, to_string_pretty};
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -118,11 +118,9 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
 }
 
 fn readline() -> io::Result<String> {
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut line = String::new();
-    handle.read_line(&mut line)?;
-    Ok(line.trim_end().to_string())
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer)?;
+    Ok(buffer.trim_end().to_string())
 }
 
 fn run_server(command: &str) {
@@ -171,9 +169,9 @@ fn run_server(command: &str) {
         let line = line_result.expect("Failed to read line");
         if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
             let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
-            println!("{}", pretty_json);
+            println!("{pretty_json}");
         } else {
-            println!("{}", line);
+            println!("{line}");
         }
     }
 
@@ -182,13 +180,17 @@ fn run_server(command: &str) {
 
     let mut err_line = String::new();
 
-    while stderr_reader.read_line(&mut err_line).unwrap() > 0 {
+    while stderr_reader
+        .read_line(&mut err_line)
+        .expect("Failed to read stderr")
+        > 0
+    {
         eprintln!("stderr: {}", err_line.trim_end());
         err_line.clear();
     }
     let status = child.wait().expect("Failed to wait on child process");
     if !status.success() {
-        eprintln!("Command exited with status: {}", status);
+        eprintln!("Command exited with status: {status}");
     }
 }
 
