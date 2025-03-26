@@ -1,8 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty};
 use std::env;
 use std::fs;
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::io::Write;
+use std::process::{Command, Stdio};
 
 const RPC_VERSION: &str = "2.0";
 const LANGUAGE_ID: &str = "c";
@@ -104,24 +105,52 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     Ok((file_uri_str, source))
 }
 
-fn run_server(command: &str, input: String) {
-    let mut child = std::process::Command::new(command)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("Error: Unable to start the server");
+fn run_server(command: &str, input: String) -> Result<(), Box<dyn std::error::Error>> {
+    let mut child = Command::new(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        std::thread::spawn(move || {
-            stdin.write_all(input.as_bytes()).expect("Error: Unable to write to stdin");
-        });
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+    let input_clone = input.clone();
+    std::thread::spawn(move || {
+        stdin
+            .write_all(input_clone.as_bytes())
+            .expect("Failed to write to stdin");
+    });
+
+    let stdout = child.stdout.take().expect("Failed to open stdout");
+    let reader = BufReader::new(stdout);
+
+    for line_result in reader.lines() {
+        let line = line_result?;
+        if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
+            let pretty_json = to_string_pretty(&json_value)?;
+            println!("{}", pretty_json);
+        } else {
+            println!("{}", line);
+        }
     }
 
-    let output = child.wait_with_output().expect("Error: Unable to read server output");
-    println!("{}", String::from_utf8_lossy(&output.stdout));
+    let stderr = child.stderr.take().expect("Failed to open stderr");
+    let mut stderr_reader = BufReader::new(stderr);
+
+    let mut err_line = String::new();
+
+    while stderr_reader.read_line(&mut err_line).unwrap() > 0 {
+        eprintln!("stderr: {}", err_line.trim_end());
+        err_line.clear();
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        eprintln!("Command exited with status: {}", status);
+    }
+
+    Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
@@ -143,5 +172,7 @@ fn main() {
     let requests = build_requests(&file_uri_str, &source);
     let input = generate_rpc_requests(&requests);
 
-    run_server(command, input);
+    run_server(command, input)?;
+
+    Ok(())
 }
