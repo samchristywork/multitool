@@ -26,69 +26,81 @@ fn create_request(method: &str, params: &Value, id: Option<i32>) -> Value {
     request
 }
 
-fn generate_rpc_request(request: &Value) -> String {
+fn generate_rpc_request(request: &Value) -> Vec<u8> {
     let request_json = request.to_string() + "\r\n";
     let content_length = request_json.len();
     format!("Content-Length: {content_length}\r\n\r\n{request_json}")
+        .as_bytes()
+        .to_vec()
 }
 
-fn generate_rpc_requests(requests: &[Value]) -> String {
-    let mut content = String::new();
-    for request in requests {
-        content += &generate_rpc_request(request);
-    }
-
-    content
+fn initialize_request(n: i32) -> Vec<u8> {
+    let request = create_request("initialize", &json!({}), Some(n));
+    generate_rpc_request(&request)
 }
 
-fn build_requests(file_uri_str: &str, source: &str) -> Vec<Value> {
-    vec![
-        create_request("initialize", &json!({}), Some(1)),
-        create_request(
-            "textDocument/didOpen",
-            &json!({
-                "textDocument": {
-                    "uri": file_uri_str,
-                    "languageId": LANGUAGE_ID,
-                    "version": 1,
-                    "text": source
-                }
-            }),
-            None,
-        ),
-        create_request(
-            "textDocument/definition",
-            &json!({
-                "textDocument": {
-                    "uri": file_uri_str
-                },
-                "position": {
-                    "line": 0,
-                    "character": 28
-                }
-            }),
-            Some(2),
-        ),
-        create_request(
-            "textDocument/documentSymbol",
-            &json!({
-                "textDocument": {
-                    "uri": file_uri_str
-                }
-            }),
-            Some(3),
-        ),
-        create_request(
-            "textDocument/didClose",
-            &json!({
-                "textDocument": {
-                    "uri": file_uri_str
-                }
-            }),
-            None,
-        ),
-        create_request("exit", &Value::Null, None),
-    ]
+fn did_open_request(file_uri_str: &str, source: &str) -> Vec<u8> {
+    let request = create_request(
+        "textDocument/didOpen",
+        &json!({
+            "textDocument": {
+                "uri": file_uri_str,
+                "languageId": LANGUAGE_ID,
+                "version": 1,
+                "text": source
+            }
+        }),
+        None,
+    );
+    generate_rpc_request(&request)
+}
+
+fn definition_request(n: i32, file_uri_str: &str, line: usize, character: usize) -> Vec<u8> {
+    let request = create_request(
+        "textDocument/definition",
+        &json!({
+            "textDocument": {
+                "uri": file_uri_str
+            },
+            "position": {
+                "line": line,
+                "character": character
+            }
+        }),
+        Some(n),
+    );
+    generate_rpc_request(&request)
+}
+
+fn document_symbol_request(n: i32, file_uri_str: &str) -> Vec<u8> {
+    let request = create_request(
+        "textDocument/documentSymbol",
+        &json!({
+            "textDocument": {
+                "uri": file_uri_str
+            }
+        }),
+        Some(n),
+    );
+    generate_rpc_request(&request)
+}
+
+fn did_close_request(file_uri_str: &str) -> Vec<u8> {
+    let request = create_request(
+        "textDocument/didClose",
+        &json!({
+            "textDocument": {
+                "uri": file_uri_str
+            }
+        }),
+        None,
+    );
+    generate_rpc_request(&request)
+}
+
+fn exit_request() -> Vec<u8> {
+    let request = create_request("exit", &Value::Null, None);
+    generate_rpc_request(&request)
 }
 
 fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
@@ -105,28 +117,60 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     Ok((file_uri_str, source))
 }
 
-fn run_server(command: &str, input: String) -> Result<(), Box<dyn std::error::Error>> {
+fn readline() -> io::Result<String> {
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    let mut line = String::new();
+    handle.read_line(&mut line)?;
+    Ok(line.trim_end().to_string())
+}
+
+fn run_server(command: &str) {
     let mut child = Command::new(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .expect("Failed to start server");
 
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
-    let input_clone = input.clone();
     std::thread::spawn(move || {
         stdin
-            .write_all(input_clone.as_bytes())
-            .expect("Failed to write to stdin");
+            .write_all(&initialize_request(1))
+            .expect("Failed to write initialize request");
+
+        let filename = readline().expect("Failed to read filename");
+        let (file_uri, source) =
+            process_file(&PathBuf::from(filename)).expect("Error processing file");
+
+        stdin
+            .write_all(&did_open_request(&file_uri, &source))
+            .expect("Failed to write didOpen request");
+
+        stdin
+            .write_all(&definition_request(2, &file_uri, 0, 28))
+            .expect("Failed to write definition request");
+
+        stdin
+            .write_all(&document_symbol_request(3, &file_uri))
+            .expect("Failed to write documentSymbol request");
+
+        stdin
+            .write_all(&did_close_request(&file_uri))
+            .expect("Failed to write didClose request");
+
+        stdin
+            .write_all(&exit_request())
+            .expect("Failed to write exit request");
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let reader = BufReader::new(stdout);
 
     for line_result in reader.lines() {
-        let line = line_result?;
+        let line = line_result.expect("Failed to read line");
         if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
-            let pretty_json = to_string_pretty(&json_value)?;
+            let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
             println!("{}", pretty_json);
         } else {
             println!("{}", line);
@@ -142,37 +186,19 @@ fn run_server(command: &str, input: String) -> Result<(), Box<dyn std::error::Er
         eprintln!("stderr: {}", err_line.trim_end());
         err_line.clear();
     }
-    let status = child.wait()?;
+    let status = child.wait().expect("Failed to wait on child process");
     if !status.success() {
         eprintln!("Command exited with status: {}", status);
     }
-
-    Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
-        eprintln!("Usage: {} <file> <command>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <command>", args[0]);
         std::process::exit(1);
     }
 
-    let file_path = PathBuf::from(&args[1]);
-    let command = &args[2];
-
-    let (file_uri_str, source) = match process_file(&file_path) {
-        Ok(result) => result,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(1);
-        }
-    };
-
-    let requests = build_requests(&file_uri_str, &source);
-    let input = generate_rpc_requests(&requests);
-
-    run_server(command, input)?;
-
-    Ok(())
+    run_server(&args[1]);
 }
