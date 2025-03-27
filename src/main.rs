@@ -173,7 +173,7 @@ fn run_server(command: &str) {
                         .expect("Failed to write documentSymbol request");
                 }
                 "quit" => break,
-                _ => eprintln!("Unknown command: {}", command),
+                _ => eprintln!("Unknown command: {command}"),
             }
         }
 
@@ -191,13 +191,16 @@ fn run_server(command: &str) {
 
     let red = "\x1b[31m";
     let normal = "\x1b[0m";
+    let green = "\x1b[32m";
+    let yellow = "\x1b[33m";
+
     for line_result in reader.lines() {
         let line = line_result.expect("Failed to read line");
         if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
             let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
-            println!("{pretty_json}");
+            println!("{green}{pretty_json}{normal}");
         } else {
-            println!("{red}{line}{normal}");
+            println!("{yellow}{line}{normal}");
         }
     }
 
@@ -211,7 +214,7 @@ fn run_server(command: &str) {
         .expect("Failed to read stderr")
         > 0
     {
-        eprintln!("stderr: {}", err_line.trim_end());
+        eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
         err_line.clear();
     }
     let status = child.wait().expect("Failed to wait on child process");
