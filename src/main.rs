@@ -148,7 +148,10 @@ fn run_server(command: &str, print_stderr: bool) {
             .write_all(&initialize_request(count.inc()))
             .expect("Failed to write initialize request");
 
-        let filename = readline().expect("Failed to read filename").trim().to_string();
+        let filename = readline()
+            .expect("Failed to read filename")
+            .trim()
+            .to_string();
         let (file_uri, source) =
             process_file(&PathBuf::from(filename)).expect("Error processing file");
 
@@ -159,7 +162,7 @@ fn run_server(command: &str, print_stderr: bool) {
         loop {
             let command = readline().expect("Failed to read command");
 
-            if command == "" {
+            if command.is_empty() {
                 break;
             }
 
@@ -228,15 +231,9 @@ fn run_server(command: &str, print_stderr: bool) {
                 .expect("Failed to read delimiter");
 
             let mut json_buffer = vec![0; length];
-            let bytes_read = reader
+            reader
                 .read_exact(&mut json_buffer)
                 .expect("Failed to read JSON message");
-
-            // TODO: Add error handling
-            //if bytes_read != length {
-            //    eprintln!("Expected {length} bytes, but read {bytes_read} bytes");
-            //    continue;
-            //}
 
             let json_str = String::from_utf8_lossy(&json_buffer);
             let json_str = json_str.trim_end();
@@ -262,11 +259,12 @@ fn run_server(command: &str, print_stderr: bool) {
 
         while stderr_reader
             .read_line(&mut err_line)
-                .expect("Failed to read stderr")
-                > 0 {
-                    eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
-                    err_line.clear();
-                }
+            .expect("Failed to read stderr")
+            > 0
+        {
+            eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
+            err_line.clear();
+        }
     }
 
     let status = child.wait().expect("Failed to wait on child process");
