@@ -142,6 +142,7 @@ fn run_server(command: &str) {
 
     let mut count = Count(0);
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
+
     std::thread::spawn(move || {
         stdin
             .write_all(&initialize_request(count.inc()))
@@ -194,15 +195,17 @@ fn run_server(command: &str) {
     let green = "\x1b[32m";
     let yellow = "\x1b[33m";
 
-    for line_result in reader.lines() {
-        let line = line_result.expect("Failed to read line");
-        if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
-            let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
-            println!("{green}{pretty_json}{normal}");
-        } else {
-            println!("{yellow}{line}{normal}");
+    std::thread::spawn(move || {
+        for line_result in reader.lines() {
+            let line = line_result.expect("Failed to read line");
+            if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
+                let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
+                println!("{green}{pretty_json}{normal}");
+            } else {
+                println!("{yellow}{line}{normal}");
+            }
         }
-    }
+    });
 
     let stderr = child.stderr.take().expect("Failed to open stderr");
     let mut stderr_reader = BufReader::new(stderr);
