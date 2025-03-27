@@ -1,7 +1,7 @@
 use serde_json::{Value, json, to_string_pretty};
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -188,7 +188,7 @@ fn run_server(command: &str) {
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
-    let reader = BufReader::new(stdout);
+    let mut reader = BufReader::new(stdout);
 
     let red = "\x1b[31m";
     let normal = "\x1b[0m";
@@ -196,13 +196,56 @@ fn run_server(command: &str) {
     let yellow = "\x1b[33m";
 
     std::thread::spawn(move || {
-        for line_result in reader.lines() {
-            let line = line_result.expect("Failed to read line");
-            if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
+        loop {
+            let mut length_line = String::new();
+            if reader
+                .read_line(&mut length_line)
+                .expect("Failed to read length line")
+                == 0
+            {
+                break; // EOF
+            }
+
+            if !length_line.starts_with("Content-Length: ") {
+                eprintln!("Unexpected line: {red}{length_line}{normal}");
+                continue;
+            }
+
+            let length_str = length_line.trim_start_matches("Content-Length: ");
+            let length: usize = length_str
+                .trim()
+                .parse()
+                .expect("Failed to parse Content-Length");
+
+            // Get 4 characters: \r\n\r\n
+            let mut delimiter = [0; 2];
+            reader
+                .read_exact(&mut delimiter)
+                .expect("Failed to read delimiter");
+
+            let mut json_buffer = vec![0; length];
+            let bytes_read = reader
+                .read_exact(&mut json_buffer)
+                .expect("Failed to read JSON message");
+
+            // TODO: Add error handling
+            //if bytes_read != length {
+            //    eprintln!("Expected {length} bytes, but read {bytes_read} bytes");
+            //    continue;
+            //}
+
+            let json_str = String::from_utf8_lossy(&json_buffer);
+            let json_str = json_str.trim_end();
+            if json_str.is_empty() {
+                eprintln!("Received empty JSON message");
+                continue;
+            }
+
+            if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
                 let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
                 println!("{green}{pretty_json}{normal}");
             } else {
-                println!("{yellow}{line}{normal}");
+                println!("{yellow}{json_str}{normal}");
             }
         }
     });
