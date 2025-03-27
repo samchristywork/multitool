@@ -155,13 +155,27 @@ fn run_server(command: &str) {
             .write_all(&did_open_request(&file_uri, &source))
             .expect("Failed to write didOpen request");
 
-        stdin
-            .write_all(&definition_request(count.inc(), &file_uri, 0, 28))
-            .expect("Failed to write definition request");
+        loop {
+            let command = readline().expect("Failed to read command");
 
-        stdin
-            .write_all(&document_symbol_request(count.inc(), &file_uri))
-            .expect("Failed to write documentSymbol request");
+            match command.as_str() {
+                "help" => {
+                    println!("Available commands: def, sym, quit");
+                }
+                "def" => {
+                    stdin
+                        .write_all(&definition_request(count.inc(), &file_uri, 0, 28))
+                        .expect("Failed to write definition request");
+                }
+                "sym" => {
+                    stdin
+                        .write_all(&document_symbol_request(count.inc(), &file_uri))
+                        .expect("Failed to write documentSymbol request");
+                }
+                "quit" => break,
+                _ => eprintln!("Unknown command: {}", command),
+            }
+        }
 
         stdin
             .write_all(&did_close_request(&file_uri))
@@ -175,13 +189,15 @@ fn run_server(command: &str) {
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let reader = BufReader::new(stdout);
 
+    let red = "\x1b[31m";
+    let normal = "\x1b[0m";
     for line_result in reader.lines() {
         let line = line_result.expect("Failed to read line");
         if let Ok(json_value) = serde_json::from_str::<Value>(&line) {
             let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
             println!("{pretty_json}");
         } else {
-            println!("{line}");
+            println!("{red}{line}{normal}");
         }
     }
 
