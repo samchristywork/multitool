@@ -120,7 +120,7 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
 fn readline() -> io::Result<String> {
     let mut buffer = String::new();
     io::stdin().read_line(&mut buffer)?;
-    Ok(buffer.trim_end().to_string())
+    Ok(buffer.to_string())
 }
 
 struct Count(i32);
@@ -132,7 +132,7 @@ impl Count {
     }
 }
 
-fn run_server(command: &str) {
+fn run_server(command: &str, print_stderr: bool) {
     let mut child = Command::new(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -148,7 +148,7 @@ fn run_server(command: &str) {
             .write_all(&initialize_request(count.inc()))
             .expect("Failed to write initialize request");
 
-        let filename = readline().expect("Failed to read filename");
+        let filename = readline().expect("Failed to read filename").trim().to_string();
         let (file_uri, source) =
             process_file(&PathBuf::from(filename)).expect("Error processing file");
 
@@ -159,7 +159,11 @@ fn run_server(command: &str) {
         loop {
             let command = readline().expect("Failed to read command");
 
-            match command.as_str() {
+            if command == "" {
+                break;
+            }
+
+            match command.trim() {
                 "help" => {
                     println!("Available commands: def, sym, quit");
                 }
@@ -250,19 +254,21 @@ fn run_server(command: &str) {
         }
     });
 
-    let stderr = child.stderr.take().expect("Failed to open stderr");
-    let mut stderr_reader = BufReader::new(stderr);
+    if print_stderr {
+        let stderr = child.stderr.take().expect("Failed to open stderr");
+        let mut stderr_reader = BufReader::new(stderr);
 
-    let mut err_line = String::new();
+        let mut err_line = String::new();
 
-    while stderr_reader
-        .read_line(&mut err_line)
-        .expect("Failed to read stderr")
-        > 0
-    {
-        eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
-        err_line.clear();
+        while stderr_reader
+            .read_line(&mut err_line)
+                .expect("Failed to read stderr")
+                > 0 {
+                    eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
+                    err_line.clear();
+                }
     }
+
     let status = child.wait().expect("Failed to wait on child process");
     if !status.success() {
         eprintln!("Command exited with status: {status}");
@@ -277,5 +283,5 @@ fn main() {
         std::process::exit(1);
     }
 
-    run_server(&args[1]);
+    run_server(&args[1], false);
 }
