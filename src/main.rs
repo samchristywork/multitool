@@ -148,6 +148,7 @@ fn handle_stdin(
     count: Arc<Mutex<Count>>,
     file_uri: String,
     source: String,
+    last_command: Arc<Mutex<Value>>,
 ) -> Result<(), String> {
     {
         let mut count_guard = count.lock().unwrap();
@@ -168,22 +169,43 @@ fn handle_stdin(
         }
 
         let mut count_guard = count.lock().unwrap();
+        let mut last_command_guard = last_command.lock().unwrap();
+
         match command.trim() {
             "help" => {
                 println!("Available commands: def, sym, quit");
+                *last_command_guard = json!("help");
             }
             "def" => {
+                let request = definition_request(count_guard.inc(), &file_uri, 0, 28);
                 stdin
-                    .write_all(&definition_request(count_guard.inc(), &file_uri, 0, 28))
+                    .write_all(&request)
                     .map_err(|e| format!("Failed to write definition request: {}", e))?;
+
+                let request_json = String::from_utf8_lossy(&request);
+                let json_value: Value =
+                    serde_json::from_str(request_json.split("\r\n\r\n").last().unwrap()).unwrap();
+                *last_command_guard = json_value;
             }
             "sym" => {
+                let request = document_symbol_request(count_guard.inc(), &file_uri);
                 stdin
-                    .write_all(&document_symbol_request(count_guard.inc(), &file_uri))
+                    .write_all(&request)
                     .map_err(|e| format!("Failed to write documentSymbol request: {}", e))?;
+
+                let request_json = String::from_utf8_lossy(&request);
+                let json_value: Value =
+                    serde_json::from_str(request_json.split("\r\n\r\n").last().unwrap()).unwrap();
+                *last_command_guard = json_value;
             }
-            "quit" => break,
-            _ => eprintln!("Unknown command: {command}"),
+            "quit" => {
+                *last_command_guard = json!("quit");
+                break;
+            }
+            _ => {
+                eprintln!("Unknown command: {command}");
+                *last_command_guard = json!("unknown");
+            }
         }
     }
 
@@ -198,7 +220,10 @@ fn handle_stdin(
     Ok(())
 }
 
-fn handle_stdout(stdout: std::process::ChildStdout) -> Result<(), String> {
+fn handle_stdout(
+    stdout: std::process::ChildStdout,
+    last_command: Arc<Mutex<Value>>,
+) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
 
     let red = "\x1b[31m";
@@ -245,6 +270,13 @@ fn handle_stdout(stdout: std::process::ChildStdout) -> Result<(), String> {
             if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
                 let pretty_json = to_string_pretty(&json_value)
                     .map_err(|e| format!("Failed to format JSON: {}", e))?;
+
+                let last_command_guard = last_command.lock().unwrap();
+                println!(
+                    "Last command: {}",
+                    to_string_pretty(&*last_command_guard).unwrap()
+                );
+
                 println!("{green}{pretty_json}{normal}");
             } else {
                 println!("{yellow}{json_str}{normal}");
@@ -280,6 +312,7 @@ fn run_server(command: &str, print_stderr: bool) {
     };
 
     let count = Arc::new(Mutex::new(Count(0)));
+    let last_command = Arc::new(Mutex::new(json!("")));
     let stdin = child.stdin.take().expect("Failed to open stdin");
 
     let filename = readline()
@@ -291,16 +324,24 @@ fn run_server(command: &str, print_stderr: bool) {
     let count_clone = count.clone();
     let file_uri_clone = file_uri.clone();
     let source_clone = source.clone();
+    let last_command_clone = last_command.clone();
 
     let stdin_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdin(stdin, count_clone, file_uri_clone, source_clone) {
+        if let Err(e) = handle_stdin(
+            stdin,
+            count_clone,
+            file_uri_clone,
+            source_clone,
+            last_command_clone,
+        ) {
             eprintln!("{}", e);
         }
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
+    let last_command_clone = last_command.clone();
     let stdout_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdout(stdout) {
+        if let Err(e) = handle_stdout(stdout, last_command_clone) {
             eprintln!("{}", e);
         }
     });
