@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 const RPC_VERSION: &str = "2.0";
 const LANGUAGE_ID: &str = "c";
@@ -132,69 +134,71 @@ impl Count {
     }
 }
 
-fn run_server(command: &str, print_stderr: bool) {
-    let mut child = Command::new(command)
+fn start_server_process(command: &str) -> Result<std::process::Child, String> {
+    Command::new(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("Failed to start server");
+        .map_err(|e| format!("Failed to start server: {}", e))
+}
 
-    let mut count = Count(0);
-    let mut stdin = child.stdin.take().expect("Failed to open stdin");
-
-    std::thread::spawn(move || {
+fn handle_stdin(
+    mut stdin: std::process::ChildStdin,
+    count: Arc<Mutex<Count>>,
+    file_uri: String,
+    source: String,
+) -> Result<(), String> {
+    {
+        let mut count_guard = count.lock().unwrap();
         stdin
-            .write_all(&initialize_request(count.inc()))
-            .expect("Failed to write initialize request");
+            .write_all(&initialize_request(count_guard.inc()))
+            .map_err(|e| format!("Failed to write initialize request: {}", e))?;
+    }
 
-        let filename = readline()
-            .expect("Failed to read filename")
-            .trim()
-            .to_string();
-        let (file_uri, source) =
-            process_file(&PathBuf::from(filename)).expect("Error processing file");
+    stdin
+        .write_all(&did_open_request(&file_uri, &source))
+        .map_err(|e| format!("Failed to write didOpen request: {}", e))?;
 
-        stdin
-            .write_all(&did_open_request(&file_uri, &source))
-            .expect("Failed to write didOpen request");
+    loop {
+        let command = readline().map_err(|e| format!("Failed to read command: {}", e))?;
 
-        loop {
-            let command = readline().expect("Failed to read command");
-
-            if command.is_empty() {
-                break;
-            }
-
-            match command.trim() {
-                "help" => {
-                    println!("Available commands: def, sym, quit");
-                }
-                "def" => {
-                    stdin
-                        .write_all(&definition_request(count.inc(), &file_uri, 0, 28))
-                        .expect("Failed to write definition request");
-                }
-                "sym" => {
-                    stdin
-                        .write_all(&document_symbol_request(count.inc(), &file_uri))
-                        .expect("Failed to write documentSymbol request");
-                }
-                "quit" => break,
-                _ => eprintln!("Unknown command: {command}"),
-            }
+        if command.is_empty() {
+            break;
         }
 
-        stdin
-            .write_all(&did_close_request(&file_uri))
-            .expect("Failed to write didClose request");
+        let mut count_guard = count.lock().unwrap();
+        match command.trim() {
+            "help" => {
+                println!("Available commands: def, sym, quit");
+            }
+            "def" => {
+                stdin
+                    .write_all(&definition_request(count_guard.inc(), &file_uri, 0, 28))
+                    .map_err(|e| format!("Failed to write definition request: {}", e))?;
+            }
+            "sym" => {
+                stdin
+                    .write_all(&document_symbol_request(count_guard.inc(), &file_uri))
+                    .map_err(|e| format!("Failed to write documentSymbol request: {}", e))?;
+            }
+            "quit" => break,
+            _ => eprintln!("Unknown command: {command}"),
+        }
+    }
 
-        stdin
-            .write_all(&exit_request())
-            .expect("Failed to write exit request");
-    });
+    stdin
+        .write_all(&did_close_request(&file_uri))
+        .map_err(|e| format!("Failed to write didClose request: {}", e))?;
 
-    let stdout = child.stdout.take().expect("Failed to open stdout");
+    stdin
+        .write_all(&exit_request())
+        .map_err(|e| format!("Failed to write exit request: {}", e))?;
+
+    Ok(())
+}
+
+fn handle_stdout(stdout: std::process::ChildStdout) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
 
     let red = "\x1b[31m";
@@ -202,38 +206,34 @@ fn run_server(command: &str, print_stderr: bool) {
     let green = "\x1b[32m";
     let yellow = "\x1b[33m";
 
-    std::thread::spawn(move || {
-        loop {
-            let mut length_line = String::new();
-            if reader
-                .read_line(&mut length_line)
-                .expect("Failed to read length line")
-                == 0
-            {
-                break; // EOF
-            }
+    loop {
+        let mut line = String::new();
+        if reader
+            .read_line(&mut line)
+            .expect("Failed to read line from stdout")
+            == 0
+        {
+            break; // EOF
+        }
 
-            if !length_line.starts_with("Content-Length: ") {
-                eprintln!("Unexpected line: {red}{length_line}{normal}");
-                continue;
-            }
-
-            let length_str = length_line.trim_start_matches("Content-Length: ");
+        if line.starts_with("Content-Length: ") {
+            let length_str = line.trim_start_matches("Content-Length: ");
             let length: usize = length_str
                 .trim()
                 .parse()
-                .expect("Failed to parse Content-Length");
+                .map_err(|e| format!("Failed to parse Content-Length: {}", e))?;
 
-            // Get 4 characters: \r\n\r\n
+            // Read the delimiter (\r\n\r\n)
             let mut delimiter = [0; 2];
             reader
                 .read_exact(&mut delimiter)
-                .expect("Failed to read delimiter");
+                .map_err(|e| format!("Failed to read delimiter: {}", e))?;
 
+            // Read the JSON message
             let mut json_buffer = vec![0; length];
             reader
                 .read_exact(&mut json_buffer)
-                .expect("Failed to read JSON message");
+                .map_err(|e| format!("Failed to read JSON message: {}", e))?;
 
             let json_str = String::from_utf8_lossy(&json_buffer);
             let json_str = json_str.trim_end();
@@ -243,28 +243,84 @@ fn run_server(command: &str, print_stderr: bool) {
             }
 
             if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                let pretty_json = to_string_pretty(&json_value).expect("Failed to format JSON");
+                let pretty_json = to_string_pretty(&json_value)
+                    .map_err(|e| format!("Failed to format JSON: {}", e))?;
                 println!("{green}{pretty_json}{normal}");
             } else {
                 println!("{yellow}{json_str}{normal}");
             }
+        } else {
+            eprintln!("Unexpected line: {red}{}{normal}", line);
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_stderr(stderr: std::process::ChildStderr) -> Result<(), String> {
+    let reader = BufReader::new(stderr);
+    let red = "\x1b[31m";
+    let normal = "\x1b[0m";
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read line from stderr: {}", e))?;
+        eprintln!("{red}stderr: {}{normal}", line.trim_end());
+    }
+
+    Ok(())
+}
+
+fn run_server(command: &str, print_stderr: bool) {
+    let mut child = match start_server_process(command) {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("{}", e);
+            return;
+        }
+    };
+
+    let count = Arc::new(Mutex::new(Count(0)));
+    let stdin = child.stdin.take().expect("Failed to open stdin");
+
+    let filename = readline()
+        .expect("Failed to read filename")
+        .trim()
+        .to_string();
+    let (file_uri, source) = process_file(&PathBuf::from(filename)).expect("Error processing file");
+
+    let count_clone = count.clone();
+    let file_uri_clone = file_uri.clone();
+    let source_clone = source.clone();
+
+    let stdin_handle = thread::spawn(move || {
+        if let Err(e) = handle_stdin(stdin, count_clone, file_uri_clone, source_clone) {
+            eprintln!("{}", e);
         }
     });
 
-    if print_stderr {
-        let stderr = child.stderr.take().expect("Failed to open stderr");
-        let mut stderr_reader = BufReader::new(stderr);
-
-        let mut err_line = String::new();
-
-        while stderr_reader
-            .read_line(&mut err_line)
-            .expect("Failed to read stderr")
-            > 0
-        {
-            eprintln!("{red}stderr: {}{normal}", err_line.trim_end());
-            err_line.clear();
+    let stdout = child.stdout.take().expect("Failed to open stdout");
+    let stdout_handle = thread::spawn(move || {
+        if let Err(e) = handle_stdout(stdout) {
+            eprintln!("{}", e);
         }
+    });
+
+    let stderr_handle = if print_stderr {
+        let stderr = child.stderr.take().expect("Failed to open stderr");
+        Some(thread::spawn(move || {
+            if let Err(e) = handle_stderr(stderr) {
+                eprintln!("{}", e);
+            }
+        }))
+    } else {
+        None
+    };
+
+    stdin_handle.join().unwrap();
+    stdout_handle.join().unwrap();
+
+    if let Some(stderr_handle) = stderr_handle {
+        stderr_handle.join().unwrap();
     }
 
     let status = child.wait().expect("Failed to wait on child process");
