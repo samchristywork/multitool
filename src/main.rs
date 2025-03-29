@@ -220,6 +220,62 @@ fn handle_stdin(
     Ok(())
 }
 
+fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> {
+    let red = "\x1b[31m";
+    let normal = "\x1b[0m";
+    let green = "\x1b[32m";
+    let yellow = "\x1b[33m";
+
+    let mut line = String::new();
+    if reader
+        .read_line(&mut line)
+        .expect("Failed to read line from stdout")
+        == 0
+    {
+        return None; // EOF
+    }
+
+    if line.starts_with("Content-Length: ") {
+        let length_str = line.trim_start_matches("Content-Length: ");
+        let length: usize = length_str
+            .trim()
+            .parse()
+            .map_err(|e| format!("Failed to parse Content-Length: {}", e))
+            .expect("Failed to parse Content-Length");
+
+        // Read the delimiter (\r\n\r\n)
+        let mut delimiter = [0; 2];
+        reader
+            .read_exact(&mut delimiter)
+            .map_err(|e| format!("Failed to read delimiter: {}", e))
+            .expect("Failed to read delimiter");
+
+        // Read the JSON message
+        let mut json_buffer = vec![0; length];
+        reader
+            .read_exact(&mut json_buffer)
+            .map_err(|e| format!("Failed to read JSON message: {}", e))
+            .expect("Failed to read JSON message");
+
+        let json_str = String::from_utf8_lossy(&json_buffer);
+        let json_str = json_str.trim_end();
+        if json_str.is_empty() {
+            eprintln!("Received empty JSON message");
+            return None;
+        }
+
+        if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+            return Some(json_value);
+        } else {
+            println!("{yellow}{json_str}{normal}");
+        }
+    } else {
+        eprintln!("Unexpected line: {red}{}{normal}", line);
+    }
+
+    None
+}
+
 fn handle_stdout(
     stdout: std::process::ChildStdout,
     last_command: Arc<Mutex<Value>>,
@@ -232,57 +288,23 @@ fn handle_stdout(
     let yellow = "\x1b[33m";
 
     loop {
-        let mut line = String::new();
-        if reader
-            .read_line(&mut line)
-            .expect("Failed to read line from stdout")
-            == 0
-        {
-            break; // EOF
-        }
+        let json_value = consume_json_rpc_message(&mut reader);
 
-        if line.starts_with("Content-Length: ") {
-            let length_str = line.trim_start_matches("Content-Length: ");
-            let length: usize = length_str
-                .trim()
-                .parse()
-                .map_err(|e| format!("Failed to parse Content-Length: {}", e))?;
+        // Pretty print last_command
+        let last_command_guard = last_command.lock().unwrap();
+        println!(
+            "Last command: {}",
+            to_string_pretty(&*last_command_guard).unwrap()
+        );
 
-            // Read the delimiter (\r\n\r\n)
-            let mut delimiter = [0; 2];
-            reader
-                .read_exact(&mut delimiter)
-                .map_err(|e| format!("Failed to read delimiter: {}", e))?;
+        // Pretty print JSON message
+        if let Some(json_value) = json_value {
+            let pretty_json = to_string_pretty(&json_value)
+                .map_err(|e| format!("Failed to format JSON: {}", e))?;
 
-            // Read the JSON message
-            let mut json_buffer = vec![0; length];
-            reader
-                .read_exact(&mut json_buffer)
-                .map_err(|e| format!("Failed to read JSON message: {}", e))?;
-
-            let json_str = String::from_utf8_lossy(&json_buffer);
-            let json_str = json_str.trim_end();
-            if json_str.is_empty() {
-                eprintln!("Received empty JSON message");
-                continue;
-            }
-
-            if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                let pretty_json = to_string_pretty(&json_value)
-                    .map_err(|e| format!("Failed to format JSON: {}", e))?;
-
-                let last_command_guard = last_command.lock().unwrap();
-                println!(
-                    "Last command: {}",
-                    to_string_pretty(&*last_command_guard).unwrap()
-                );
-
-                println!("{green}{pretty_json}{normal}");
-            } else {
-                println!("{yellow}{json_str}{normal}");
-            }
+            println!("{green}{pretty_json}{normal}");
         } else {
-            eprintln!("Unexpected line: {red}{}{normal}", line);
+            break;
         }
     }
 
@@ -302,6 +324,10 @@ fn handle_stderr(stderr: std::process::ChildStderr) -> Result<(), String> {
     Ok(())
 }
 
+fn flush() {
+    io::stdout().flush().expect("Failed to flush stdout");
+}
+
 fn run_server(command: &str, print_stderr: bool) {
     let mut child = match start_server_process(command) {
         Ok(child) => child,
@@ -315,10 +341,17 @@ fn run_server(command: &str, print_stderr: bool) {
     let last_command = Arc::new(Mutex::new(json!("")));
     let stdin = child.stdin.take().expect("Failed to open stdin");
 
-    let filename = readline()
+    print!("Enter filename (Default main.c): ");
+    flush();
+    let mut filename = readline()
         .expect("Failed to read filename")
         .trim()
         .to_string();
+
+    if filename.is_empty() {
+        filename = "main.c".to_string();
+    }
+
     let (file_uri, source) = process_file(&PathBuf::from(filename)).expect("Error processing file");
 
     let count_clone = count.clone();
