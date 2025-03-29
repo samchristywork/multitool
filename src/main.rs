@@ -342,6 +342,39 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
     Err("No result found in JSON response".to_string())
 }
 
+fn display_symbols(json_value: &Value) -> Result<(), String> {
+    if let Some(result) = json_value.get("result") {
+        if result.is_null() {
+            println!("No symbols found.");
+        } else if let Some(symbols) = result.as_array() {
+            if symbols.is_empty() {
+                println!("No symbols found.");
+            } else {
+                for symbol in symbols {
+                    if let Some(name) = symbol.get("name") {
+                        println!("Symbol name: {}", name.as_str().unwrap_or("Unknown"));
+                    } else {
+                        println!("Symbol found but name is missing.");
+                    }
+                    if let Some(location) = symbol.get("location") {
+                        if let Some(range) = location.get("range") {
+                            println!("Symbol location range:");
+                            display_range(range);
+                        } else {
+                            println!("Symbol location found but range is missing.");
+                        }
+                    } else {
+                        println!("Symbol found but location is missing.");
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    Err("No result found in JSON response".to_string())
+}
+
 fn display_json_rpc_message(
     json_value: Option<Value>,
     commands: &Arc<Mutex<Vec<Value>>>,
@@ -361,11 +394,7 @@ fn display_json_rpc_message(
                             display_definition(&value)?;
                         }
                         "textDocument/documentSymbol" => {
-                            if let Some(result) = value.get("result") {
-                                let pretty_json = to_string_pretty(&result)
-                                    .map_err(|e| format!("Failed to format JSON: {e}"))?;
-                                println!("{pretty_json}");
-                            }
+                            display_symbols(&value)?;
                         }
                         _ => {
                             let command = to_string_pretty(command)
