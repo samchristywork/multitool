@@ -286,18 +286,57 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
     None
 }
 
+fn display_range(range: &Value) {
+    if let Some(end) = range.get("end") {
+        if let Some(start) = range.get("start") {
+            println!(
+                "Start: line {}, character {}, End: line {}, character {}",
+                start.get("line").and_then(|l| l.as_i64()).unwrap_or(-1),
+                start
+                    .get("character")
+                    .and_then(|c| c.as_i64())
+                    .unwrap_or(-1),
+                end.get("line").and_then(|l| l.as_i64()).unwrap_or(-1),
+                end.get("character").and_then(|c| c.as_i64()).unwrap_or(-1)
+            );
+        } else {
+            println!("Start range missing.");
+        }
+    } else {
+        println!("Range missing.");
+    }
+}
+
 fn display_definition(json_value: &Value) -> Result<(), String> {
     if let Some(result) = json_value.get("result") {
         if result.is_null() {
             println!("No definition found.");
             return Ok(());
         } else {
-            let pretty_json =
-                to_string_pretty(&result).map_err(|e| format!("Failed to format JSON: {e}"))?;
-            println!("{pretty_json}");
+            if let Some(results) = result.as_array() {
+                if results.is_empty() {
+                    println!("No definition found.");
+                    return Ok(());
+                } else {
+                    for item in results {
+                        if let Some(uri) = item.get("uri") {
+                            println!("Definition found at URI: {uri}");
+                            if let Some(range) = item.get("range") {
+                                display_range(range);
+                            } else {
+                                println!("Definition found but range is missing.");
+                            }
+                        } else {
+                            println!("Definition found but URI is missing.");
+                        }
+                    }
+                }
+            }
+
             return Ok(());
         }
     }
+
     Err("No result found in JSON response".to_string())
 }
 
