@@ -148,7 +148,7 @@ fn handle_stdin(
     count: &Arc<Mutex<Count>>,
     file_uri: &str,
     source: &str,
-    last_command: &Arc<Mutex<Value>>,
+    commands: &Arc<Mutex<Vec<Value>>>,
 ) -> Result<(), String> {
     {
         let mut count_guard = count.lock().expect("Failed to lock count");
@@ -169,12 +169,12 @@ fn handle_stdin(
         }
 
         let mut count_guard = count.lock().expect("Failed to lock count");
-        let mut last_command_guard = last_command.lock().expect("Failed to lock last_command");
+        let mut commands_guard = commands.lock().expect("Failed to lock commands");
 
         match command.trim() {
             "help" => {
                 println!("Available commands: def, sym, quit");
-                *last_command_guard = json!("help");
+                commands_guard.push(json!("help"));
             }
             "def" => {
                 let request = definition_request(count_guard.inc(), file_uri, 9, 4);
@@ -190,7 +190,7 @@ fn handle_stdin(
                         .expect("Failed to split request"),
                 )
                 .expect("Failed to parse JSON");
-                *last_command_guard = json_value;
+                commands_guard.push(json_value);
             }
             "sym" => {
                 let request = document_symbol_request(count_guard.inc(), file_uri);
@@ -207,15 +207,15 @@ fn handle_stdin(
                         .expect("Failed to split request"),
                 )
                 .expect("Failed to parse JSON");
-                *last_command_guard = json_value;
+                commands_guard.push(json_value);
             }
             "quit" => {
-                *last_command_guard = json!("quit");
+                commands_guard.push(json!("quit"));
                 break;
             }
             _ => {
                 eprintln!("Unknown command: {command}");
-                *last_command_guard = json!("unknown");
+                commands_guard.push(json!("unknown"));
             }
         }
     }
@@ -286,9 +286,80 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
     None
 }
 
+fn display_definition(json_value: &Value) -> Result<(), String> {
+    if let Some(result) = json_value.get("result") {
+        if result.is_null() {
+            println!("No definition found.");
+            return Ok(());
+        } else {
+            let pretty_json =
+                to_string_pretty(&result).map_err(|e| format!("Failed to format JSON: {e}"))?;
+            println!("{pretty_json}");
+            return Ok(());
+        }
+    }
+    Err("No result found in JSON response".to_string())
+}
+
+fn display_json_rpc_message(
+    json_value: Option<Value>,
+    commands: &Arc<Mutex<Vec<Value>>>,
+) -> Result<(), String> {
+    if let Some(value) = json_value {
+        if let Some(id) = value.get("id") {
+            let commands_guard = commands.lock().expect("Failed to lock commands");
+            for command in commands_guard.iter() {
+                if command.get("id") == Some(id) {
+                    let method = command
+                        .get("method")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown method");
+
+                    match method {
+                        "textDocument/definition" => {
+                            display_definition(&value)?;
+                        }
+                        "textDocument/documentSymbol" => {
+                            if let Some(result) = value.get("result") {
+                                let pretty_json = to_string_pretty(&result)
+                                    .map_err(|e| format!("Failed to format JSON: {e}"))?;
+                                println!("{pretty_json}");
+                            }
+                        }
+                        _ => {
+                            let command = to_string_pretty(command)
+                                .map_err(|e| format!("Failed to format JSON: {e}"))
+                                .unwrap_or_else(|_| "Failed to format JSON".to_string());
+                            let response = to_string_pretty(&value)
+                                .map_err(|e| format!("Failed to format JSON: {e}"))
+                                .unwrap_or_else(|_| "Failed to format JSON".to_string());
+
+                            println!("Command: {command}");
+                            println!("Response: {response}",);
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
+        let pretty_json =
+            to_string_pretty(&value).map_err(|e| format!("Failed to format JSON: {e}"))?;
+
+        let normal = "\x1b[0m";
+        let green = "\x1b[32m";
+
+        println!("{green}{pretty_json}{normal}");
+
+        Ok(())
+    } else {
+        Err("No JSON message received".to_string())
+    }
+}
+
 fn handle_stdout(
     stdout: std::process::ChildStdout,
-    last_command: &Arc<Mutex<Value>>,
+    commands: &Arc<Mutex<Vec<Value>>>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
 
@@ -297,44 +368,9 @@ fn handle_stdout(
 
     loop {
         let json_value = consume_json_rpc_message(&mut reader);
-        let last_command_guard = last_command.lock().expect("Failed to lock last_command");
-        let last_method = if let Some(method) = last_command_guard.get("method") {
-            method.as_str().unwrap_or("Unknown")
-        } else {
-            "Unknown"
-        };
-
-        match last_method {
-            "textDocument/definition" => {
-                println!("Method: textDocument/definition");
-                let value = json_value.unwrap();
-                let result = value.get("result").unwrap_or(&json!(null));
-                if result.is_null() {
-                    println!("No definition found.");
-                } else {
-                    let pretty_json = to_string_pretty(&result)
-                        .map_err(|e| format!("Failed to format JSON: {e}"))?;
-                    println!("{green}{pretty_json}{normal}");
-                }
-            }
-            _ => {
-                println!(
-                    "Last command: {}",
-                    to_string_pretty(&*last_command_guard)
-                        .expect("Failed to pretty print last_command")
-                );
-                drop(last_command_guard);
-
-                // Pretty print JSON message
-                if let Some(json_value) = json_value {
-                    let pretty_json = to_string_pretty(&json_value)
-                        .map_err(|e| format!("Failed to format JSON: {e}"))?;
-
-                    println!("{green}{pretty_json}{normal}");
-                } else {
-                    break;
-                }
-            }
+        if let Err(e) = display_json_rpc_message(json_value.clone(), commands) {
+            eprintln!("{e}");
+            break;
         }
     }
 
@@ -368,7 +404,8 @@ fn run_server(command: &str, print_stderr: bool) {
     };
 
     let count = Arc::new(Mutex::new(Count(0)));
-    let last_command = Arc::new(Mutex::new(json!("")));
+    let commands = Arc::new(Mutex::new(Vec::new()));
+
     let stdin = child.stdin.take().expect("Failed to open stdin");
 
     print!("Enter filename (Default main.c): ");
@@ -384,17 +421,17 @@ fn run_server(command: &str, print_stderr: bool) {
 
     let (file_uri, source) = process_file(&PathBuf::from(filename)).expect("Error processing file");
 
-    let last_command_clone = last_command.clone();
+    let commands_clone = commands.clone();
     let stdin_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdin(stdin, &count, &file_uri, &source, &last_command_clone) {
+        if let Err(e) = handle_stdin(stdin, &count, &file_uri, &source, &commands_clone) {
             eprintln!("{e}");
         }
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
-    let last_command_clone = last_command;
+    let commands_clone = commands.clone();
     let stdout_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdout(stdout, &last_command_clone) {
+        if let Err(e) = handle_stdout(stdout, &commands_clone) {
             eprintln!("{e}");
         }
     });
