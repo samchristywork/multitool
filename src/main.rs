@@ -145,7 +145,7 @@ fn start_server_process(command: &str) -> Result<std::process::Child, String> {
 
 fn handle_stdin(
     mut stdin: std::process::ChildStdin,
-    count: Arc<Mutex<Count>>,
+    count: &Arc<Mutex<Count>>,
     file_uri: &str,
     source: &str,
     last_command: &Arc<Mutex<Value>>,
@@ -194,6 +194,7 @@ fn handle_stdin(
             }
             "sym" => {
                 let request = document_symbol_request(count_guard.inc(), file_uri);
+                drop(count_guard);
                 stdin
                     .write_all(&request)
                     .map_err(|e| format!("Failed to write documentSymbol request: {e}"))?;
@@ -220,7 +221,7 @@ fn handle_stdin(
     }
 
     stdin
-        .write_all(&did_close_request(&file_uri))
+        .write_all(&did_close_request(file_uri))
         .map_err(|e| format!("Failed to write didClose request: {e}"))?;
 
     stdin
@@ -233,7 +234,6 @@ fn handle_stdin(
 fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> {
     let red = "\x1b[31m";
     let normal = "\x1b[0m";
-    let green = "\x1b[32m";
     let yellow = "\x1b[33m";
 
     let mut line = String::new();
@@ -276,9 +276,9 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
 
         if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
             return Some(json_value);
-        } else {
-            println!("{yellow}{json_str}{normal}");
         }
+
+        println!("{yellow}{json_str}{normal}");
     } else {
         eprintln!("Unexpected line: {red}{line}{normal}");
     }
@@ -292,10 +292,8 @@ fn handle_stdout(
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
 
-    let red = "\x1b[31m";
     let normal = "\x1b[0m";
     let green = "\x1b[32m";
-    let yellow = "\x1b[33m";
 
     loop {
         let json_value = consume_json_rpc_message(&mut reader);
@@ -306,11 +304,12 @@ fn handle_stdout(
             "Last command: {}",
             to_string_pretty(&*last_command_guard).expect("Failed to pretty print last_command")
         );
+        drop(last_command_guard);
 
         // Pretty print JSON message
         if let Some(json_value) = json_value {
-            let pretty_json = to_string_pretty(&json_value)
-                .map_err(|e| format!("Failed to format JSON: {e}"))?;
+            let pretty_json =
+                to_string_pretty(&json_value).map_err(|e| format!("Failed to format JSON: {e}"))?;
 
             println!("{green}{pretty_json}{normal}");
         } else {
@@ -366,13 +365,7 @@ fn run_server(command: &str, print_stderr: bool) {
 
     let last_command_clone = last_command.clone();
     let stdin_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdin(
-            stdin,
-            count,
-            &file_uri,
-            &source,
-            &last_command_clone,
-        ) {
+        if let Err(e) = handle_stdin(stdin, &count, &file_uri, &source, &last_command_clone) {
             eprintln!("{e}");
         }
     });
