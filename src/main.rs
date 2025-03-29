@@ -291,13 +291,20 @@ fn display_range(range: &Value) {
         if let Some(start) = range.get("start") {
             println!(
                 "Start: line {}, character {}, End: line {}, character {}",
-                start.get("line").and_then(|l| l.as_i64()).unwrap_or(-1),
+                start
+                    .get("line")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(-1),
                 start
                     .get("character")
-                    .and_then(|c| c.as_i64())
+                    .and_then(serde_json::Value::as_i64)
                     .unwrap_or(-1),
-                end.get("line").and_then(|l| l.as_i64()).unwrap_or(-1),
-                end.get("character").and_then(|c| c.as_i64()).unwrap_or(-1)
+                end.get("line")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(-1),
+                end.get("character")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(-1)
             );
         } else {
             println!("Start range missing.");
@@ -311,30 +318,25 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
     if let Some(result) = json_value.get("result") {
         if result.is_null() {
             println!("No definition found.");
-            return Ok(());
-        } else {
-            if let Some(results) = result.as_array() {
-                if results.is_empty() {
-                    println!("No definition found.");
-                    return Ok(());
-                } else {
-                    for item in results {
-                        if let Some(uri) = item.get("uri") {
-                            println!("Definition found at URI: {uri}");
-                            if let Some(range) = item.get("range") {
-                                display_range(range);
-                            } else {
-                                println!("Definition found but range is missing.");
-                            }
+        } else if let Some(results) = result.as_array() {
+            if results.is_empty() {
+                println!("No definition found.");
+            } else {
+                for item in results {
+                    if let Some(uri) = item.get("uri") {
+                        println!("Definition found at URI: {uri}");
+                        if let Some(range) = item.get("range") {
+                            display_range(range);
                         } else {
-                            println!("Definition found but URI is missing.");
+                            println!("Definition found but range is missing.");
                         }
+                    } else {
+                        println!("Definition found but URI is missing.");
                     }
                 }
             }
-
-            return Ok(());
         }
+        return Ok(());
     }
 
     Err("No result found in JSON response".to_string())
@@ -396,14 +398,8 @@ fn display_json_rpc_message(
     }
 }
 
-fn handle_stdout(
-    stdout: std::process::ChildStdout,
-    commands: &Arc<Mutex<Vec<Value>>>,
-) -> Result<(), String> {
+fn handle_stdout(stdout: std::process::ChildStdout, commands: &Arc<Mutex<Vec<Value>>>) {
     let mut reader = BufReader::new(stdout);
-
-    let normal = "\x1b[0m";
-    let green = "\x1b[32m";
 
     loop {
         let json_value = consume_json_rpc_message(&mut reader);
@@ -412,8 +408,6 @@ fn handle_stdout(
             break;
         }
     }
-
-    Ok(())
 }
 
 fn handle_stderr(stderr: std::process::ChildStderr) -> Result<(), String> {
@@ -468,11 +462,9 @@ fn run_server(command: &str, print_stderr: bool) {
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
-    let commands_clone = commands.clone();
+    let commands_clone = commands;
     let stdout_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdout(stdout, &commands_clone) {
-            eprintln!("{e}");
-        }
+        handle_stdout(stdout, &commands_clone);
     });
 
     let stderr_handle = if print_stderr {
