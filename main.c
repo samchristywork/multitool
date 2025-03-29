@@ -1,5 +1,7 @@
 #include <stdio.h>
 
+int i=1;
+
 void foo() {
   printf("Hello, World\n");
 }

@@ -177,7 +177,7 @@ fn handle_stdin(
                 *last_command_guard = json!("help");
             }
             "def" => {
-                let request = definition_request(count_guard.inc(), file_uri, 0, 28);
+                let request = definition_request(count_guard.inc(), file_uri, 9, 4);
                 stdin
                     .write_all(&request)
                     .map_err(|e| format!("Failed to write definition request: {e}"))?;
@@ -297,23 +297,44 @@ fn handle_stdout(
 
     loop {
         let json_value = consume_json_rpc_message(&mut reader);
-
-        // Pretty print last_command
         let last_command_guard = last_command.lock().expect("Failed to lock last_command");
-        println!(
-            "Last command: {}",
-            to_string_pretty(&*last_command_guard).expect("Failed to pretty print last_command")
-        );
-        drop(last_command_guard);
-
-        // Pretty print JSON message
-        if let Some(json_value) = json_value {
-            let pretty_json =
-                to_string_pretty(&json_value).map_err(|e| format!("Failed to format JSON: {e}"))?;
-
-            println!("{green}{pretty_json}{normal}");
+        let last_method = if let Some(method) = last_command_guard.get("method") {
+            method.as_str().unwrap_or("Unknown")
         } else {
-            break;
+            "Unknown"
+        };
+
+        match last_method {
+            "textDocument/definition" => {
+                println!("Method: textDocument/definition");
+                let value = json_value.unwrap();
+                let result = value.get("result").unwrap_or(&json!(null));
+                if result.is_null() {
+                    println!("No definition found.");
+                } else {
+                    let pretty_json = to_string_pretty(&result)
+                        .map_err(|e| format!("Failed to format JSON: {e}"))?;
+                    println!("{green}{pretty_json}{normal}");
+                }
+            }
+            _ => {
+                println!(
+                    "Last command: {}",
+                    to_string_pretty(&*last_command_guard)
+                        .expect("Failed to pretty print last_command")
+                );
+                drop(last_command_guard);
+
+                // Pretty print JSON message
+                if let Some(json_value) = json_value {
+                    let pretty_json = to_string_pretty(&json_value)
+                        .map_err(|e| format!("Failed to format JSON: {e}"))?;
+
+                    println!("{green}{pretty_json}{normal}");
+                } else {
+                    break;
+                }
+            }
         }
     }
 
