@@ -140,36 +140,36 @@ fn start_server_process(command: &str) -> Result<std::process::Child, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to start server: {}", e))
+        .map_err(|e| format!("Failed to start server: {e}"))
 }
 
 fn handle_stdin(
     mut stdin: std::process::ChildStdin,
     count: Arc<Mutex<Count>>,
-    file_uri: String,
-    source: String,
-    last_command: Arc<Mutex<Value>>,
+    file_uri: &str,
+    source: &str,
+    last_command: &Arc<Mutex<Value>>,
 ) -> Result<(), String> {
     {
-        let mut count_guard = count.lock().unwrap();
+        let mut count_guard = count.lock().expect("Failed to lock count");
         stdin
             .write_all(&initialize_request(count_guard.inc()))
-            .map_err(|e| format!("Failed to write initialize request: {}", e))?;
+            .map_err(|e| format!("Failed to write initialize request: {e}"))?;
     }
 
     stdin
-        .write_all(&did_open_request(&file_uri, &source))
-        .map_err(|e| format!("Failed to write didOpen request: {}", e))?;
+        .write_all(&did_open_request(file_uri, source))
+        .map_err(|e| format!("Failed to write didOpen request: {e}"))?;
 
     loop {
-        let command = readline().map_err(|e| format!("Failed to read command: {}", e))?;
+        let command = readline().map_err(|e| format!("Failed to read command: {e}"))?;
 
         if command.is_empty() {
             break;
         }
 
-        let mut count_guard = count.lock().unwrap();
-        let mut last_command_guard = last_command.lock().unwrap();
+        let mut count_guard = count.lock().expect("Failed to lock count");
+        let mut last_command_guard = last_command.lock().expect("Failed to lock last_command");
 
         match command.trim() {
             "help" => {
@@ -177,25 +177,35 @@ fn handle_stdin(
                 *last_command_guard = json!("help");
             }
             "def" => {
-                let request = definition_request(count_guard.inc(), &file_uri, 0, 28);
+                let request = definition_request(count_guard.inc(), file_uri, 0, 28);
                 stdin
                     .write_all(&request)
-                    .map_err(|e| format!("Failed to write definition request: {}", e))?;
+                    .map_err(|e| format!("Failed to write definition request: {e}"))?;
 
                 let request_json = String::from_utf8_lossy(&request);
-                let json_value: Value =
-                    serde_json::from_str(request_json.split("\r\n\r\n").last().unwrap()).unwrap();
+                let json_value: Value = serde_json::from_str(
+                    request_json
+                        .split("\r\n\r\n")
+                        .last()
+                        .expect("Failed to split request"),
+                )
+                .expect("Failed to parse JSON");
                 *last_command_guard = json_value;
             }
             "sym" => {
-                let request = document_symbol_request(count_guard.inc(), &file_uri);
+                let request = document_symbol_request(count_guard.inc(), file_uri);
                 stdin
                     .write_all(&request)
-                    .map_err(|e| format!("Failed to write documentSymbol request: {}", e))?;
+                    .map_err(|e| format!("Failed to write documentSymbol request: {e}"))?;
 
                 let request_json = String::from_utf8_lossy(&request);
-                let json_value: Value =
-                    serde_json::from_str(request_json.split("\r\n\r\n").last().unwrap()).unwrap();
+                let json_value: Value = serde_json::from_str(
+                    request_json
+                        .split("\r\n\r\n")
+                        .last()
+                        .expect("Failed to split request"),
+                )
+                .expect("Failed to parse JSON");
                 *last_command_guard = json_value;
             }
             "quit" => {
@@ -211,11 +221,11 @@ fn handle_stdin(
 
     stdin
         .write_all(&did_close_request(&file_uri))
-        .map_err(|e| format!("Failed to write didClose request: {}", e))?;
+        .map_err(|e| format!("Failed to write didClose request: {e}"))?;
 
     stdin
         .write_all(&exit_request())
-        .map_err(|e| format!("Failed to write exit request: {}", e))?;
+        .map_err(|e| format!("Failed to write exit request: {e}"))?;
 
     Ok(())
 }
@@ -240,21 +250,21 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
         let length: usize = length_str
             .trim()
             .parse()
-            .map_err(|e| format!("Failed to parse Content-Length: {}", e))
+            .map_err(|e| format!("Failed to parse Content-Length: {e}"))
             .expect("Failed to parse Content-Length");
 
         // Read the delimiter (\r\n\r\n)
         let mut delimiter = [0; 2];
         reader
             .read_exact(&mut delimiter)
-            .map_err(|e| format!("Failed to read delimiter: {}", e))
+            .map_err(|e| format!("Failed to read delimiter: {e}"))
             .expect("Failed to read delimiter");
 
         // Read the JSON message
         let mut json_buffer = vec![0; length];
         reader
             .read_exact(&mut json_buffer)
-            .map_err(|e| format!("Failed to read JSON message: {}", e))
+            .map_err(|e| format!("Failed to read JSON message: {e}"))
             .expect("Failed to read JSON message");
 
         let json_str = String::from_utf8_lossy(&json_buffer);
@@ -270,7 +280,7 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
             println!("{yellow}{json_str}{normal}");
         }
     } else {
-        eprintln!("Unexpected line: {red}{}{normal}", line);
+        eprintln!("Unexpected line: {red}{line}{normal}");
     }
 
     None
@@ -278,7 +288,7 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
 
 fn handle_stdout(
     stdout: std::process::ChildStdout,
-    last_command: Arc<Mutex<Value>>,
+    last_command: &Arc<Mutex<Value>>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
 
@@ -291,16 +301,16 @@ fn handle_stdout(
         let json_value = consume_json_rpc_message(&mut reader);
 
         // Pretty print last_command
-        let last_command_guard = last_command.lock().unwrap();
+        let last_command_guard = last_command.lock().expect("Failed to lock last_command");
         println!(
             "Last command: {}",
-            to_string_pretty(&*last_command_guard).unwrap()
+            to_string_pretty(&*last_command_guard).expect("Failed to pretty print last_command")
         );
 
         // Pretty print JSON message
         if let Some(json_value) = json_value {
             let pretty_json = to_string_pretty(&json_value)
-                .map_err(|e| format!("Failed to format JSON: {}", e))?;
+                .map_err(|e| format!("Failed to format JSON: {e}"))?;
 
             println!("{green}{pretty_json}{normal}");
         } else {
@@ -317,7 +327,7 @@ fn handle_stderr(stderr: std::process::ChildStderr) -> Result<(), String> {
     let normal = "\x1b[0m";
 
     for line in reader.lines() {
-        let line = line.map_err(|e| format!("Failed to read line from stderr: {}", e))?;
+        let line = line.map_err(|e| format!("Failed to read line from stderr: {e}"))?;
         eprintln!("{red}stderr: {}{normal}", line.trim_end());
     }
 
@@ -332,7 +342,7 @@ fn run_server(command: &str, print_stderr: bool) {
     let mut child = match start_server_process(command) {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{e}");
             return;
         }
     };
@@ -354,28 +364,24 @@ fn run_server(command: &str, print_stderr: bool) {
 
     let (file_uri, source) = process_file(&PathBuf::from(filename)).expect("Error processing file");
 
-    let count_clone = count.clone();
-    let file_uri_clone = file_uri.clone();
-    let source_clone = source.clone();
     let last_command_clone = last_command.clone();
-
     let stdin_handle = thread::spawn(move || {
         if let Err(e) = handle_stdin(
             stdin,
-            count_clone,
-            file_uri_clone,
-            source_clone,
-            last_command_clone,
+            count,
+            &file_uri,
+            &source,
+            &last_command_clone,
         ) {
-            eprintln!("{}", e);
+            eprintln!("{e}");
         }
     });
 
     let stdout = child.stdout.take().expect("Failed to open stdout");
-    let last_command_clone = last_command.clone();
+    let last_command_clone = last_command;
     let stdout_handle = thread::spawn(move || {
-        if let Err(e) = handle_stdout(stdout, last_command_clone) {
-            eprintln!("{}", e);
+        if let Err(e) = handle_stdout(stdout, &last_command_clone) {
+            eprintln!("{e}");
         }
     });
 
@@ -383,18 +389,18 @@ fn run_server(command: &str, print_stderr: bool) {
         let stderr = child.stderr.take().expect("Failed to open stderr");
         Some(thread::spawn(move || {
             if let Err(e) = handle_stderr(stderr) {
-                eprintln!("{}", e);
+                eprintln!("{e}");
             }
         }))
     } else {
         None
     };
 
-    stdin_handle.join().unwrap();
-    stdout_handle.join().unwrap();
+    stdin_handle.join().expect("Failed to join stdin thread");
+    stdout_handle.join().expect("Failed to join stdout thread");
 
     if let Some(stderr_handle) = stderr_handle {
-        stderr_handle.join().unwrap();
+        stderr_handle.join().expect("Failed to join stderr thread");
     }
 
     let status = child.wait().expect("Failed to wait on child process");
