@@ -343,36 +343,41 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
 }
 
 fn display_symbols(json_value: &Value) -> Result<(), String> {
-    if let Some(result) = json_value.get("result") {
-        if result.is_null() {
-            println!("No symbols found.");
-        } else if let Some(symbols) = result.as_array() {
-            if symbols.is_empty() {
-                println!("No symbols found.");
-            } else {
-                for symbol in symbols {
-                    if let Some(name) = symbol.get("name") {
-                        println!("Symbol name: {}", name.as_str().unwrap_or("Unknown"));
-                    } else {
-                        println!("Symbol found but name is missing.");
-                    }
-                    if let Some(location) = symbol.get("location") {
-                        if let Some(range) = location.get("range") {
-                            println!("Symbol location range:");
-                            display_range(range);
-                        } else {
-                            println!("Symbol location found but range is missing.");
-                        }
-                    } else {
-                        println!("Symbol found but location is missing.");
-                    }
-                }
-            }
-        }
-        return Ok(());
+    let symbols = json_value
+        .get("result")
+        .ok_or("No result found in JSON response")?
+        .as_array()
+        .ok_or("No symbols found.")?;
+
+    if symbols.is_empty() {
+        return Err("No symbols found.".to_string());
     }
 
-    Err("No result found in JSON response".to_string())
+    for symbol in symbols {
+        let name = symbol
+            .get("name")
+            .ok_or("Symbol found but name is missing.")?
+            .as_str()
+            .ok_or("Invalid symbol name")?;
+
+        let location = symbol
+            .get("location")
+            .ok_or("Symbol found but location is missing.")?;
+        let range = location
+            .get("range")
+            .ok_or("Symbol location found but range is missing.")?;
+
+        let uri = location
+            .get("uri")
+            .ok_or("Symbol location found but URI is missing.")?
+            .as_str()
+            .ok_or("Invalid symbol URI")?;
+
+        println!("Symbol name: {name}\nSymbol URI: {uri}\nSymbol location range:");
+        display_range(range);
+    }
+
+    Ok(())
 }
 
 fn display_json_rpc_message(
