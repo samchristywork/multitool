@@ -286,32 +286,34 @@ fn consume_json_rpc_message(reader: &mut BufReader<impl Read>) -> Option<Value> 
     None
 }
 
-fn display_range(range: &Value) {
-    if let Some(end) = range.get("end") {
-        if let Some(start) = range.get("start") {
-            println!(
-                "Start: line {}, character {}, End: line {}, character {}",
-                start
-                    .get("line")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(-1),
-                start
-                    .get("character")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(-1),
-                end.get("line")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(-1),
-                end.get("character")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(-1)
-            );
-        } else {
-            println!("Start range missing.");
-        }
-    } else {
-        println!("Range missing.");
-    }
+fn format_range(range: &Value) -> Result<String, String> {
+    range.get("end").map_or_else(
+        || Err("Range end is missing".to_string()),
+        |end| {
+            range.get("start").map_or_else(
+                || Err("Range start is missing".to_string()),
+                |start| {
+                    Ok(format!(
+                        "{}:{}->{}:{}",
+                        start
+                            .get("line")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(-1),
+                        start
+                            .get("character")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(-1),
+                        end.get("line")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(-1),
+                        end.get("character")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(-1)
+                    ))
+                },
+            )
+        },
+    )
 }
 
 fn display_definition(json_value: &Value) -> Result<(), String> {
@@ -326,7 +328,14 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
                     if let Some(uri) = item.get("uri") {
                         println!("Definition found at URI: {uri}");
                         if let Some(range) = item.get("range") {
-                            display_range(range);
+                            match format_range(range) {
+                                Ok(range_str) => {
+                                    println!("Definition range: {range_str}");
+                                }
+                                Err(e) => {
+                                    println!("Failed to format range: {e}");
+                                }
+                            }
                         } else {
                             println!("Definition found but range is missing.");
                         }
@@ -373,8 +382,9 @@ fn display_symbols(json_value: &Value) -> Result<(), String> {
             .as_str()
             .ok_or("Invalid symbol URI")?;
 
-        println!("Symbol name: {name}\nSymbol URI: {uri}\nSymbol location range:");
-        display_range(range);
+        let range_str = format_range(range)
+            .map_err(|e| format!("Failed to format range for symbol '{name}': {e}"))?;
+        println!("{uri}\t{range_str}\t{name}");
     }
 
     Ok(())
