@@ -1,5 +1,5 @@
+use clap::Parser;
 use serde_json::{Value, json, to_string_pretty};
-use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -9,6 +9,30 @@ use std::thread;
 
 const RPC_VERSION: &str = "2.0";
 const LANGUAGE_ID: &str = "c";
+
+#[derive(Parser, Debug)]
+#[clap(
+    author = "Sam Christy",
+    version = "1.0",
+    about = "A language server client."
+)]
+struct Args {
+    /// The command to execute for the language server
+    #[clap(short, long, default_value = "clangd")]
+    command: String,
+
+    /// Print stderr from the language server
+    #[clap(long)]
+    print_stderr: bool,
+
+    /// Echo the commands sent to the language server
+    #[clap(long)]
+    echo_commands: bool,
+
+    /// Echo the responses received from the language server
+    #[clap(long)]
+    echo_responses: bool,
+}
 
 fn file_uri(file_path: &str) -> String {
     format!("file://{file_path}")
@@ -171,9 +195,11 @@ fn handle_stdin(
         let mut count_guard = count.lock().expect("Failed to lock count");
         let mut commands_guard = commands.lock().expect("Failed to lock commands");
 
+        let available = "def, sym, help, quit";
+
         match command.trim() {
             "help" => {
-                println!("Available commands: def, sym, quit");
+                println!("Available commands: {available}");
                 commands_guard.push(json!("help"));
             }
             "def" => {
@@ -214,7 +240,8 @@ fn handle_stdin(
                 break;
             }
             _ => {
-                eprintln!("Unknown command: {command}");
+                eprintln!("Unknown command: {}", command.trim());
+                eprintln!("Available commands: {available}");
                 commands_guard.push(json!("unknown"));
             }
         }
@@ -508,8 +535,10 @@ fn flush() {
     io::stdout().flush().expect("Failed to flush stdout");
 }
 
-fn run_server(command: &str, print_stderr: bool, echo_commands: bool, echo_responses: bool) {
-    let mut child = match start_server_process(command) {
+fn run_server() {
+    let args = Args::parse();
+
+    let mut child = match start_server_process(&args.command) {
         Ok(child) => child,
         Err(e) => {
             eprintln!("{e}");
@@ -545,10 +574,15 @@ fn run_server(command: &str, print_stderr: bool, echo_commands: bool, echo_respo
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let commands_clone = commands;
     let stdout_handle = thread::spawn(move || {
-        handle_stdout(stdout, &commands_clone, echo_commands, echo_responses);
+        handle_stdout(
+            stdout,
+            &commands_clone,
+            args.echo_commands,
+            args.echo_responses,
+        );
     });
 
-    let stderr_handle = if print_stderr {
+    let stderr_handle = if args.print_stderr {
         let stderr = child.stderr.take().expect("Failed to open stderr");
         Some(thread::spawn(move || {
             if let Err(e) = handle_stderr(stderr) {
@@ -573,12 +607,5 @@ fn run_server(command: &str, print_stderr: bool, echo_commands: bool, echo_respo
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <command>", args[0]);
-        std::process::exit(1);
-    }
-
-    run_server(&args[1], false, false, false);
+    run_server();
 }
