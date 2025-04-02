@@ -326,11 +326,14 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
             } else {
                 for item in results {
                     if let Some(uri) = item.get("uri") {
-                        println!("Definition found at URI: {uri}");
+                        let uri = uri
+                            .as_str()
+                            .ok_or("Invalid URI")
+                            .map_err(|e| format!("Failed to format URI: {e}"))?;
                         if let Some(range) = item.get("range") {
                             match format_range(range) {
                                 Ok(range_str) => {
-                                    println!("Definition range: {range_str}");
+                                    println!("{uri}\t{range_str}");
                                 }
                                 Err(e) => {
                                     println!("Failed to format range: {e}");
