@@ -393,11 +393,30 @@ fn display_symbols(json_value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn display_message(command: &Value, value: &Value) -> Result<(), String> {
+fn display_message(
+    command: &Value,
+    value: &Value,
+    echo_commands: bool,
+    echo_responses: bool,
+) -> Result<(), String> {
     let method = command
         .get("method")
         .and_then(|m| m.as_str())
         .unwrap_or("Unknown method");
+
+    if echo_commands {
+        let command = to_string_pretty(command)
+            .map_err(|e| format!("Failed to format JSON: {e}"))
+            .unwrap_or_else(|_| "Failed to format JSON".to_string());
+        println!("Command: {command}");
+    }
+
+    if echo_responses {
+        let response = to_string_pretty(&value)
+            .map_err(|e| format!("Failed to format JSON: {e}"))
+            .unwrap_or_else(|_| "Failed to format JSON".to_string());
+        println!("Response: {response}",);
+    }
 
     match method {
         "textDocument/definition" => {
@@ -425,13 +444,15 @@ fn display_message(command: &Value, value: &Value) -> Result<(), String> {
 fn display_json_rpc_message(
     json_value: Option<Value>,
     commands: &Arc<Mutex<Vec<Value>>>,
+    echo_commands: bool,
+    echo_responses: bool,
 ) -> Result<(), String> {
     if let Some(value) = json_value {
         if let Some(id) = value.get("id") {
             let commands_guard = commands.lock().expect("Failed to lock commands");
             for command in commands_guard.iter() {
                 if command.get("id") == Some(id) {
-                    display_message(command, &value)?;
+                    display_message(command, &value, echo_commands, echo_responses)?;
                     return Ok(());
                 }
             }
@@ -451,12 +472,19 @@ fn display_json_rpc_message(
     }
 }
 
-fn handle_stdout(stdout: std::process::ChildStdout, commands: &Arc<Mutex<Vec<Value>>>) {
+fn handle_stdout(
+    stdout: std::process::ChildStdout,
+    commands: &Arc<Mutex<Vec<Value>>>,
+    echo_commands: bool,
+    echo_responses: bool,
+) {
     let mut reader = BufReader::new(stdout);
 
     loop {
         let json_value = consume_json_rpc_message(&mut reader);
-        if let Err(e) = display_json_rpc_message(json_value.clone(), commands) {
+        if let Err(e) =
+            display_json_rpc_message(json_value.clone(), commands, echo_commands, echo_responses)
+        {
             eprintln!("{e}");
             break;
         }
@@ -480,7 +508,7 @@ fn flush() {
     io::stdout().flush().expect("Failed to flush stdout");
 }
 
-fn run_server(command: &str, print_stderr: bool) {
+fn run_server(command: &str, print_stderr: bool, echo_commands: bool, echo_responses: bool) {
     let mut child = match start_server_process(command) {
         Ok(child) => child,
         Err(e) => {
@@ -517,7 +545,7 @@ fn run_server(command: &str, print_stderr: bool) {
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let commands_clone = commands;
     let stdout_handle = thread::spawn(move || {
-        handle_stdout(stdout, &commands_clone);
+        handle_stdout(stdout, &commands_clone, echo_commands, echo_responses);
     });
 
     let stderr_handle = if print_stderr {
@@ -552,5 +580,5 @@ fn main() {
         std::process::exit(1);
     }
 
-    run_server(&args[1], false);
+    run_server(&args[1], false, false, false);
 }
