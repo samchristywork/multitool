@@ -152,6 +152,20 @@ pub fn handle_command(
 
             Some(request)
         }
+        "ref" => {
+            let request = reference_request(count_guard.inc(), file_uri, 9, 4);
+            let request_json = String::from_utf8_lossy(&request);
+            let json_value: Value = serde_json::from_str(
+                request_json
+                    .split("\r\n\r\n")
+                    .last()
+                    .expect("Failed to split request"),
+            )
+            .expect("Failed to parse JSON");
+            commands_guard.push(json_value);
+
+            Some(request)
+        }
         "sym" => {
             let request = document_symbol_request(count_guard.inc(), file_uri);
             drop(count_guard);

@@ -231,6 +231,44 @@ fn display_definition(json_value: &Value) -> Result<(), String> {
     Err("No result found in JSON response".to_string())
 }
 
+fn display_references(json_value: &Value) -> Result<(), String> {
+    if let Some(result) = json_value.get("result") {
+        if result.is_null() {
+            println!("No references found.");
+        } else if let Some(results) = result.as_array() {
+            if results.is_empty() {
+                println!("No references found.");
+            } else {
+                for item in results {
+                    if let Some(uri) = item.get("uri") {
+                        let uri = uri
+                            .as_str()
+                            .ok_or("Invalid URI")
+                            .map_err(|e| format!("Failed to format URI: {e}"))?;
+                        if let Some(range) = item.get("range") {
+                            match format_range(range) {
+                                Ok(range_str) => {
+                                    println!("{uri}\t{range_str}");
+                                }
+                                Err(e) => {
+                                    println!("Failed to format range: {e}");
+                                }
+                            }
+                        } else {
+                            println!("Reference found but range is missing.");
+                        }
+                    } else {
+                        println!("Reference found but URI is missing.");
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    Err("No result found in JSON response".to_string())
+}
+
 fn display_symbols(json_value: &Value) -> Result<(), String> {
     let symbols = json_value
         .get("result")
@@ -298,6 +336,9 @@ fn display_message(
     match method {
         "textDocument/definition" => {
             display_definition(value)?;
+        }
+        "textDocument/references" => {
+            display_references(value)?;
         }
         "textDocument/documentSymbol" => {
             display_symbols(value)?;
