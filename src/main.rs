@@ -1,5 +1,7 @@
+mod request;
+
 use clap::Parser;
-use serde_json::{Value, json, to_string_pretty};
+use serde_json::{Value, to_string_pretty};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -7,8 +9,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-const RPC_VERSION: &str = "2.0";
-const LANGUAGE_ID: &str = "c";
+use request::*;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -23,7 +24,7 @@ struct Args {
 
     /// Print stderr from the language server
     #[clap(long)]
-    print_stderr: bool,
+    echo_stderr: bool,
 
     /// Echo the commands sent to the language server
     #[clap(long)]
@@ -32,101 +33,10 @@ struct Args {
     /// Echo the responses received from the language server
     #[clap(long)]
     echo_responses: bool,
-}
 
-fn file_uri(file_path: &str) -> String {
-    format!("file://{file_path}")
-}
-
-fn create_request(method: &str, params: &Value, id: Option<i32>) -> Value {
-    let mut request = json!({
-        "jsonrpc": RPC_VERSION,
-        "method": method,
-        "params": params,
-    });
-
-    if let Some(id_value) = id {
-        request["id"] = json!(id_value);
-    }
-
-    request
-}
-
-fn generate_rpc_request(request: &Value) -> Vec<u8> {
-    let request_json = request.to_string() + "\r\n";
-    let content_length = request_json.len();
-    format!("Content-Length: {content_length}\r\n\r\n{request_json}")
-        .as_bytes()
-        .to_vec()
-}
-
-fn initialize_request(n: i32) -> Vec<u8> {
-    let request = create_request("initialize", &json!({}), Some(n));
-    generate_rpc_request(&request)
-}
-
-fn did_open_request(file_uri_str: &str, source: &str) -> Vec<u8> {
-    let request = create_request(
-        "textDocument/didOpen",
-        &json!({
-            "textDocument": {
-                "uri": file_uri_str,
-                "languageId": LANGUAGE_ID,
-                "version": 1,
-                "text": source
-            }
-        }),
-        None,
-    );
-    generate_rpc_request(&request)
-}
-
-fn definition_request(n: i32, file_uri_str: &str, line: usize, character: usize) -> Vec<u8> {
-    let request = create_request(
-        "textDocument/definition",
-        &json!({
-            "textDocument": {
-                "uri": file_uri_str
-            },
-            "position": {
-                "line": line,
-                "character": character
-            }
-        }),
-        Some(n),
-    );
-    generate_rpc_request(&request)
-}
-
-fn document_symbol_request(n: i32, file_uri_str: &str) -> Vec<u8> {
-    let request = create_request(
-        "textDocument/documentSymbol",
-        &json!({
-            "textDocument": {
-                "uri": file_uri_str
-            }
-        }),
-        Some(n),
-    );
-    generate_rpc_request(&request)
-}
-
-fn did_close_request(file_uri_str: &str) -> Vec<u8> {
-    let request = create_request(
-        "textDocument/didClose",
-        &json!({
-            "textDocument": {
-                "uri": file_uri_str
-            }
-        }),
-        None,
-    );
-    generate_rpc_request(&request)
-}
-
-fn exit_request() -> Vec<u8> {
-    let request = create_request("exit", &Value::Null, None);
-    generate_rpc_request(&request)
+    /// Turn on all echo options
+    #[clap(short, long)]
+    debug: bool,
 }
 
 fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
@@ -135,18 +45,12 @@ fn process_file(file_path: &PathBuf) -> Result<(String, String), String> {
     let current_file_str = current_file
         .to_str()
         .expect("Error: Unable to convert path to string");
-    let file_uri_str = file_uri(current_file_str);
+    let file_uri_str = format!("file://{current_file_str}");
 
     let source =
         fs::read_to_string(file_path).map_err(|_| "Error: Unable to read file".to_string())?;
 
     Ok((file_uri_str, source))
-}
-
-fn readline() -> io::Result<String> {
-    let mut buffer = String::new();
-    io::stdin().read_line(&mut buffer)?;
-    Ok(buffer.to_string())
 }
 
 struct Count(i32);
@@ -186,64 +90,10 @@ fn handle_stdin(
         .map_err(|e| format!("Failed to write didOpen request: {e}"))?;
 
     loop {
-        let command = readline().map_err(|e| format!("Failed to read command: {e}"))?;
-
-        if command.is_empty() {
-            break;
-        }
-
-        let mut count_guard = count.lock().expect("Failed to lock count");
-        let mut commands_guard = commands.lock().expect("Failed to lock commands");
-
-        let available = "def, sym, help, quit";
-
-        match command.trim() {
-            "help" => {
-                println!("Available commands: {available}");
-                commands_guard.push(json!("help"));
-            }
-            "def" => {
-                let request = definition_request(count_guard.inc(), file_uri, 9, 4);
-                stdin
-                    .write_all(&request)
-                    .map_err(|e| format!("Failed to write definition request: {e}"))?;
-
-                let request_json = String::from_utf8_lossy(&request);
-                let json_value: Value = serde_json::from_str(
-                    request_json
-                        .split("\r\n\r\n")
-                        .last()
-                        .expect("Failed to split request"),
-                )
-                .expect("Failed to parse JSON");
-                commands_guard.push(json_value);
-            }
-            "sym" => {
-                let request = document_symbol_request(count_guard.inc(), file_uri);
-                drop(count_guard);
-                stdin
-                    .write_all(&request)
-                    .map_err(|e| format!("Failed to write documentSymbol request: {e}"))?;
-
-                let request_json = String::from_utf8_lossy(&request);
-                let json_value: Value = serde_json::from_str(
-                    request_json
-                        .split("\r\n\r\n")
-                        .last()
-                        .expect("Failed to split request"),
-                )
-                .expect("Failed to parse JSON");
-                commands_guard.push(json_value);
-            }
-            "quit" => {
-                commands_guard.push(json!("quit"));
-                break;
-            }
-            _ => {
-                eprintln!("Unknown command: {}", command.trim());
-                eprintln!("Available commands: {available}");
-                commands_guard.push(json!("unknown"));
-            }
+        if let Ok(Some(request)) = handle_command(count, commands, file_uri) {
+            stdin
+                .write_all(&request)
+                .map_err(|e| format!("Failed to write reference request: {e}"))?;
         }
     }
 
@@ -531,10 +381,6 @@ fn handle_stderr(stderr: std::process::ChildStderr) -> Result<(), String> {
     Ok(())
 }
 
-fn flush() {
-    io::stdout().flush().expect("Failed to flush stdout");
-}
-
 fn run_server() {
     let args = Args::parse();
 
@@ -552,9 +398,12 @@ fn run_server() {
     let stdin = child.stdin.take().expect("Failed to open stdin");
 
     print!("Enter filename (Default main.c): ");
-    flush();
-    let mut filename = readline()
-        .expect("Failed to read filename")
+    io::stdout().flush().expect("Failed to flush stdout");
+
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer).expect("Failed to read line");
+
+    let mut filename = buffer
         .trim()
         .to_string();
 
@@ -577,12 +426,12 @@ fn run_server() {
         handle_stdout(
             stdout,
             &commands_clone,
-            args.echo_commands,
-            args.echo_responses,
+            args.echo_commands || args.debug,
+            args.echo_responses || args.debug,
         );
     });
 
-    let stderr_handle = if args.print_stderr {
+    let stderr_handle = if args.echo_stderr || args.debug {
         let stderr = child.stderr.take().expect("Failed to open stderr");
         Some(thread::spawn(move || {
             if let Err(e) = handle_stderr(stderr) {

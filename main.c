@@ -18,3 +18,12 @@ int main() {
   baz();
   return 0;
 }
+
+void bizz() {
+  foo();
+  foo();
+  foo();
+  foo();
+  foo();
+  foo();
+}
